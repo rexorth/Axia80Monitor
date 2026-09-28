@@ -1,4 +1,4 @@
-# TorqueMeter: Raspberry Pi interface for the ATI NET-Axia80-M8
+# Axia80Monitor: interface for the ATI NET-Axia80-M8
 
 Host software for the ATI **Ethernet Axia80-M8** 6-axis force/torque sensor (P/N 9105-NET-Axia80-M8).
 
@@ -9,7 +9,16 @@ This unit's details:
 | MAC address | `00:16:BD:00:4D:EC` |
 | Calibration serials | FT54714 and FT54715 (the two factory calibration ranges) |
 
-The code is pure Python 3 and uses only the standard library, so nothing needs to be installed.
+There are two ways to use it:
+
+- **The graphical console** (`python3 -m axia80`) needs three packages in a local venv:
+
+  ```bash
+  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+  ```
+
+  After that, plain `python3 -m axia80` finds the venv by itself, so you don't need to activate it.
+- **The command-line subcommands** (`python3 -m axia80 info`, `stream`, and so on) use only the Python standard library and need nothing installed.
 
 All sensor facts below come from ATI manual *9610-05-Ethernet Axia-10*:
 [PDF](https://www.ati-ia.com/app_content/documents/9610-05-Ethernet%20Axia.pdf).
@@ -105,7 +114,62 @@ If the sensor isn't at 192.168.1.1, it probably got an address from a DHCP serve
 
 Then set that address as `host:` in `config.yaml`, or pass it with `--host` or `AXIA_HOST`. `sudo python3 -m axia80 find` automates this search; see [Changing or finding the sensor's IP address](#changing-or-finding-the-sensors-ip-address).
 
+## Graphical console
+
+```bash
+python3 -m axia80                  # opens the console window (uses config.yaml)
+python3 -m axia80 --host 10.0.0.5  # any global option still works
+```
+
+The window is split into four resizable quadrants:
+
+| | Left | Right |
+|---|---|---|
+| **Top** | Torque plot (Tx, Ty, Tz) | Force plot (Fx, Fy, Fz) |
+| **Bottom** | Live readout: the `monitor` view, with values, % of range, status, sample rate and drops | Console: everything the commands print, with an `axia80>` command line underneath |
+
+- Which plot sits on which side is set with `gui.top_left` and `gui.top_right` in `config.yaml`, or live with `plot swap`.
+- When every channel of one plot is turned off, the other plot fills the whole top half.
+
+Streaming starts automatically when the window opens (`gui.autostart`). Type commands into the command line:
+
+| Command | Does |
+|---|---|
+| `start` / `stop` | Start or stop streaming |
+| `record FILE.csv [SECONDS]` | Record the live stream to CSV, in the same format as `stream`. `record stop` ends it; `record` alone shows progress. |
+| `plot` | Show the channel menu, with `[x]` marking the channels that are on |
+| `plot fz off`, `plot 1 2`, `plot torque off`, `plot all` | Turn channels on or off. Channels can be given as `fx`…`tz`, as numbers 1–6, or as `force`, `torque`, `all` or `none`. Without `on` or `off`, each channel toggles. |
+| `plot swap`, `plot left force` | Change which plot is on which side |
+| `window SECONDS` | Plot history length, 0.5–60 s |
+| `pause` / `resume` | Freeze the plots so you can zoom or pan with the mouse. Streaming and recording continue. |
+| `connect [IP]` | Reconnect, optionally to a different sensor address |
+| `info`, `read`, `bias [--clear]`, `config …`, `set-ip …`, `find …` | The command-line commands, unchanged. Add `-h` for options. |
+| `stream --csv FILE …` | Same as `record` |
+| `help`, `clear`, `quit` | Show help, clear the console, close the window |
+
+The command line has history (Up/Down) and completes command names (Tab). `set-ip` asks for confirmation in the console; type `y` or `n`.
+
+**Performance:**
+
+- Samples go into a 60 s ring buffer on a background thread.
+- The plots redraw at `gui.refresh_hz` (30 Hz by default). Each redraw first reduces the data to a min/max pair per screen pixel, so short spikes stay visible.
+- At the sensor's full 7.9 kHz this used about 25–35% of one CPU core with no dropped samples (measured with the simulator).
+- `gui.buffered: true` (the default) gives the lowest CPU use. It takes effect when the sensor's RDT buffer size is above 1: `config --rdt-buffer 40`.
+
+GUI options in `config.yaml`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `gui.top_left`, `gui.top_right` | `torque`, `force` | Plot in each top quadrant: `torque`, `force` or `none` |
+| `gui.channels` | `Fx Fy Fz Tx Ty Tz` | Channels plotted at startup |
+| `gui.window` | `10` | Seconds of history shown |
+| `gui.refresh_hz` | `30` | Redraw rate |
+| `gui.autostart` | `true` | Start streaming when the window opens |
+| `gui.buffered` | `true` | Use buffered RDT packets |
+
 ## Usage
+
+Command-line subcommands, useful for scripts or when there's no display:
 
 ```bash
 python3 -m axia80 info                                   # identity, calibration, units, rates, status
@@ -261,7 +325,7 @@ If PyYAML is installed (Debian package `python3-yaml`) it is used to read the fi
 `tools/fake_axia.py` simulates the sensor's UDP and HTTP interfaces.
 
 ```bash
-python3 -m unittest discover -s tests          # unit and end-to-end tests
+.venv/bin/python -m unittest discover -s tests  # all tests (plain python3 skips the GUI data tests)
 python3 tools/fake_axia.py --http-port 8080 &  # run the simulator
 python3 -m axia80 --host 127.0.0.1 --http-port 8080 monitor
 ```
@@ -272,10 +336,13 @@ python3 -m axia80 --host 127.0.0.1 --http-port 8080 monitor
 |---|---|
 | `axia80/protocol.py` | Wire formats: RDT, TCP, status bits, unit codes |
 | `axia80/sensor.py` | `AxiaSensor` client: HTTP config, UDP streaming, bias, TCP fallback |
-| `axia80/__main__.py` | Command-line tool |
+| `axia80/__main__.py` | Entry point for `python3 -m axia80` |
+| `axia80/cli.py` | Command-line subcommands, and GUI launch when no command is given |
+| `axia80/gui.py` | Graphical console: Qt window, pyqtgraph plots, stream and command threads |
 | `axia80/config.py` | Loads `config.yaml` |
 | `axia80/netutil.py` | Network helpers for `find` and `set-ip`: ARP cache, ARP sweep, power-up listen, `config.yaml` host update |
-| `config.yaml` | Launch options (IP address, MAC, sensor settings, command defaults) |
+| `config.yaml` | Launch options (IP address, MAC, sensor settings, command and GUI defaults) |
+| `requirements.txt` | GUI packages for `.venv`: numpy, pyqtgraph, PySide6-Essentials |
 | `tools/fake_axia.py` | Sensor simulator |
 | `tests/` | Unit tests |
 

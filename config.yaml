@@ -32,3 +32,13 @@ stream:
   duration: 0                # seconds to record; 0 = until Ctrl-C
   count: 0                   # samples to record; 0 = unlimited
   buffered: false            # recommended above ~2 kHz output rate
+
+# --- Graphical console (python3 -m axia80 with no command) -------------------------
+gui:
+  top_left: torque           # plot in the top-left quadrant: torque, force or none
+  top_right: force           # plot in the top-right quadrant
+  channels: Tx Ty Tz  # channels plotted at startup (change live with `plot`)
+  window: 10                 # seconds of history shown in the plots
+  refresh_hz: 30             # plot/readout redraw rate
+  autostart: true            # start streaming as soon as the window opens
+  buffered: true             # buffered RDT packets: lower CPU at high rates

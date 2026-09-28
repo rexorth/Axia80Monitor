@@ -22,6 +22,15 @@ DEFAULTS = {
     "bias_on_start": False,
     "monitor": {"hz": 20.0, "buffered": False},
     "stream": {"csv": None, "duration": 0.0, "count": 0, "buffered": False},
+    "gui": {
+        "top_left": "torque",        # torque | force | none
+        "top_right": "force",
+        "channels": "Fx Fy Fz Tx Ty Tz",
+        "window": 10.0,              # seconds of history shown in the plots
+        "refresh_hz": 30.0,          # plot/readout redraw rate
+        "autostart": True,           # start streaming when the window opens
+        "buffered": True,            # RDT buffered packets (lower CPU at high rates)
+    },
 }
 
 SEARCH_PATHS = (

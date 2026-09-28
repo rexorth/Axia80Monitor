@@ -11,7 +11,7 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 from axia80 import netutil as n  # noqa: E402
-from axia80.__main__ import main  # noqa: E402
+from axia80.cli import main  # noqa: E402
 from fake_axia import FakeAxia  # noqa: E402
 
 SENSOR_MAC = "00:16:BD:00:4D:EC"
