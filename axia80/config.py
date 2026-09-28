@@ -27,6 +27,9 @@ DEFAULTS = {
         "top_right": "force",
         "channels": "Fx Fy Fz Tx Ty Tz",
         "window": 10.0,              # seconds of history shown in the plots
+        "min_span_force": 0.05,      # smallest y-axis span on the force plot (force units, N)
+        "min_span_torque": 0.005,    # smallest y-axis span on the torque plot (torque units, Nm)
+        "hold_test_view": True,      # keep showing a finished recording until `live`
         "refresh_hz": 30.0,          # plot/readout redraw rate
         "autostart": True,           # start streaming when the window opens
         "buffered": True,            # RDT buffered packets (lower CPU at high rates)

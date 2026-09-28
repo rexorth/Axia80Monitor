@@ -136,7 +136,8 @@ Streaming starts automatically when the window opens (`gui.autostart`). Type com
 | Command | Does |
 |---|---|
 | `start` / `stop` | Start or stop streaming |
-| `record FILE.csv [SECONDS]` | Record the live stream to CSV, in the same format as `stream`. `record stop` ends it; `record` alone shows progress. |
+| `record FILE.csv [SECONDS]` | Record to CSV, in the same format as `stream`. `record stop` ends it; `record` alone shows progress. See [Recordings](#recordings) for how the plots change. |
+| `live` | After a recording, return the plots to the rolling live window |
 | `plot` | Show the channel menu, with `[x]` marking the channels that are on |
 | `plot fz off`, `plot 1 2`, `plot torque off`, `plot all` | Turn channels on or off. Channels can be given as `fx`…`tz`, as numbers 1–6, or as `force`, `torque`, `all` or `none`. Without `on` or `off`, each channel toggles. |
 | `plot swap`, `plot left force` | Change which plot is on which side |
@@ -146,6 +147,24 @@ Streaming starts automatically when the window opens (`gui.autostart`). Type com
 | `info`, `read`, `bias [--clear]`, `config …`, `set-ip …`, `find …` | The command-line commands, unchanged. Add `-h` for options. |
 | `stream --csv FILE …` | Same as `record` |
 | `help`, `clear`, `quit` | Show help, clear the console, close the window |
+
+#### Recordings
+
+Starting a recording with `record` (or `stream --csv`) changes what the plots show:
+
+- The live history from before the test is discarded, and the plots show only data that goes into the CSV. The x-axis becomes "time since recording start".
+- The x-axis rescales continuously, so the whole test is always on screen. The line grows from the left edge and the axis stretches as the test runs.
+- When the recording ends, the plots keep showing it so you can inspect it (`pause` then mouse-zoom works too). Type `live` to go back to the rolling window. Set `gui.hold_test_view: false` to switch back automatically.
+
+A recording can run longer than the 60 s live buffer, so the plots keep their own copy of it.
+
+- The first ~400k samples are kept at full resolution: about 50 s at 7.9 kHz, or about 7 min at 1 kHz.
+- After that, older data is compacted to min/max pairs, so memory stays bounded and spikes remain visible.
+- The CSV file always gets every sample; the compaction only affects what is drawn.
+
+#### Y-axis scaling
+
+Each plot's y-axis fits the data on screen, but never goes below a minimum span: **0.05 N** for force and **0.005 N·m** for torque. When the signal is nearly flat, sensor noise therefore stays small instead of being blown up to fill the plot. Change the minimums with `gui.min_span_force` and `gui.min_span_torque`. Axis ranges are held while plots are `pause`d, so mouse zoom and pan work.
 
 The command line has history (Up/Down) and completes command names (Tab). `set-ip` asks for confirmation in the console; type `y` or `n`.
 
@@ -162,7 +181,10 @@ GUI options in `config.yaml`:
 |---|---|---|
 | `gui.top_left`, `gui.top_right` | `torque`, `force` | Plot in each top quadrant: `torque`, `force` or `none` |
 | `gui.channels` | `Fx Fy Fz Tx Ty Tz` | Channels plotted at startup |
-| `gui.window` | `10` | Seconds of history shown |
+| `gui.window` | `10` | Seconds of history shown in the live view |
+| `gui.min_span_force` | `0.05` | Smallest y-axis span on the force plot (N) |
+| `gui.min_span_torque` | `0.005` | Smallest y-axis span on the torque plot (N·m) |
+| `gui.hold_test_view` | `true` | Keep a finished recording on screen until `live` |
 | `gui.refresh_hz` | `30` | Redraw rate |
 | `gui.autostart` | `true` | Start streaming when the window opens |
 | `gui.buffered` | `true` | Use buffered RDT packets |

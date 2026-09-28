@@ -7,7 +7,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 try:
     import numpy as np
-    from axia80.gui import RingBuffer, peak_decimate
+    from axia80.gui import RingBuffer, TestHistory, peak_decimate, y_limits
 except ImportError as e:
     raise unittest.SkipTest(f"GUI packages not installed ({e.name}); run with .venv/bin/python")
 
@@ -66,11 +66,65 @@ class PeakDecimateTest(unittest.TestCase):
         y[0, 12345] = 5.0                  # single-sample spike
         y[0, 50000] = -3.0
         xo, yo = peak_decimate(x, y, 700)
-        self.assertEqual(xo.shape, (1400,))
+        self.assertEqual(xo.shape, (80000 - 700 * 114 + 1400,))   # 200 raw leftovers + 700 min/max pairs
         self.assertEqual(yo.max(), 5.0)
         self.assertEqual(yo.min(), -3.0)
         self.assertEqual(xo[-1], x[-1])    # newest sample still at the right edge
         self.assertTrue(np.all(np.diff(xo) >= 0))
+
+    def test_oldest_samples_are_not_dropped(self):
+        # few samples per bucket leaves a large remainder; it must still be drawn
+        n = 2000
+        x = np.arange(n) / 1000.0
+        y = np.arange(n, dtype=float)[None, :]
+        xo, yo = peak_decimate(x, y, 700)
+        self.assertEqual(xo[0], 0.0)
+        self.assertEqual(yo[0, 0], 0.0)
+        self.assertEqual(xo[-1], x[-1])
+        self.assertLessEqual(len(xo), n)
+
+
+class YLimitsTest(unittest.TestCase):
+    def test_min_span_applies_to_quiet_signal(self):
+        lo, hi = y_limits(1.000, 1.002, min_span=0.05, pad=0)
+        self.assertAlmostEqual(hi - lo, 0.05)
+        self.assertAlmostEqual((hi + lo) / 2, 1.001)        # centred on the data
+
+    def test_large_signal_uses_data_range_plus_padding(self):
+        lo, hi = y_limits(-2.0, 3.0, min_span=0.05, pad=0.05)
+        self.assertAlmostEqual(lo, -2.25)
+        self.assertAlmostEqual(hi, 3.25)
+
+
+class TestHistoryTest(unittest.TestCase):
+    def test_starts_at_zero_and_keeps_everything_below_limit(self):
+        h = TestHistory(limit=1000)
+        t = 100.0 + np.arange(600) / 100.0
+        y = np.stack([np.sin(t)] * 6, axis=1)
+        for i in range(0, 600, 64):
+            h.extend(t[i:i + 64], y[i:i + 64])
+        self.assertEqual(h.n, 600)
+        self.assertEqual(h.t[0], 0.0)
+        self.assertAlmostEqual(h.duration(), 5.99)
+        x, yd = h.decimated([0, 3], buckets=1000)          # small: returned undecimated
+        np.testing.assert_allclose(x, t - 100.0)
+        self.assertEqual(yd.shape, (2, 600))
+
+    def test_compaction_is_bounded_and_keeps_extremes(self):
+        h = TestHistory(limit=4000)
+        n = 50_000
+        t = np.arange(n) / 1000.0
+        y = np.zeros((n, 6))
+        y[123, 2] = 9.0                                     # early spike must survive compaction
+        y[40_000, 2] = -7.0
+        for i in range(0, n, 333):
+            h.extend(t[i:i + 333], y[i:i + 333])
+        self.assertLessEqual(h.n, 4000)
+        self.assertEqual(h.t[0], 0.0)
+        self.assertAlmostEqual(h.duration(), t[-1])         # newest sample kept
+        self.assertTrue(np.all(np.diff(h.t[:h.n]) >= 0))
+        self.assertEqual(h.y[2, :h.n].max(), 9.0)
+        self.assertEqual(h.y[2, :h.n].min(), -7.0)
 
 
 if __name__ == "__main__":

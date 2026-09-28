@@ -47,7 +47,9 @@ HELP = """\
 Streaming and display
   start [--no-buffered]      start streaming (auto-starts if gui.autostart is true)
   stop                       stop streaming
-  record FILE.csv [SECONDS]  record the live stream to CSV (record stop / record = status)
+  record FILE.csv [SECONDS]  record to CSV (record stop / record = status). The plots then show
+                             only the recording, scaled to fit the whole test.
+  live                       after a recording, return the plots to the rolling live window
   plot                       show the plot channel menu
   plot CH... [on|off]        toggle or set channels: fx fy fz tx ty tz, 1-6, force, torque, all, none
   plot swap                  swap the two plots; plot left|right torque|force|none
@@ -131,14 +133,77 @@ def peak_decimate(x, y, buckets):
     if buckets < 1 or n <= 2 * buckets:
         return x, y
     step = n // buckets
-    start = n - step * buckets                   # align buckets to the newest sample
-    xs = x[start:].reshape(buckets, step)
+    start = n - step * buckets                   # buckets align to the newest sample; the
+    xs = x[start:].reshape(buckets, step)        # < `buckets` oldest leftovers stay as raw points
     ys = y[:, start:].reshape(y.shape[0], buckets, step)
-    xo = np.empty(2 * buckets)
-    xo[0::2], xo[1::2] = xs[:, 0], xs[:, -1]
-    yo = np.empty((y.shape[0], 2 * buckets))
-    yo[:, 0::2], yo[:, 1::2] = ys.min(axis=2), ys.max(axis=2)
+    xo = np.empty(start + 2 * buckets)
+    yo = np.empty((y.shape[0], start + 2 * buckets))
+    xo[:start], yo[:, :start] = x[:start], y[:, :start]
+    xo[start::2], xo[start + 1::2] = xs[:, 0], xs[:, -1]
+    yo[:, start::2], yo[:, start + 1::2] = ys.min(axis=2), ys.max(axis=2)
     return xo, yo
+
+
+def y_limits(ymin, ymax, min_span, pad=0.05):
+    """Y range around the data, never narrower than min_span (so noise isn't magnified)."""
+    span = max(ymax - ymin, min_span)
+    half = span * (1 + 2 * pad) / 2
+    mid = (ymax + ymin) / 2
+    return mid - half, mid + half
+
+
+class TestHistory:
+    """Every sample of the current recording, for display; memory stays bounded.
+
+    Recordings can outlast the live ring buffer, so they get their own store. It holds
+    full-rate data up to `limit` samples (~50 s at 7.9 kHz); when full, it compacts itself
+    to min/max pairs at half the size, so older data gets coarser but spikes stay visible.
+    Times are seconds since the first recorded sample.
+    """
+
+    def __init__(self, limit=400_000):
+        self.limit = limit
+        self.t = np.empty(limit)
+        self.y = np.empty((6, limit))
+        self.n = 0
+        self.t0 = None
+        self.lock = threading.Lock()
+
+    def extend(self, t, y):
+        """t: (n,), y: (n, 6) in stream-thread order."""
+        if len(t) == 0:
+            return
+        with self.lock:
+            if self.t0 is None:
+                self.t0 = t[0]
+            t, y = t - self.t0, y.T
+            while len(t):
+                if self.n == self.limit:
+                    self._compact()
+                k = min(len(t), self.limit - self.n)
+                self.t[self.n:self.n + k] = t[:k]
+                self.y[:, self.n:self.n + k] = y[:, :k]
+                self.n += k
+                t, y = t[k:], y[:, k:]
+
+    def _compact(self):
+        x, y = peak_decimate(self.t[:self.n], self.y[:, :self.n], self.limit // 4)
+        m = len(x)                                # <= limit/4 raw leftovers + limit/2 min/max points
+        self.t[:m] = x
+        self.y[:, :m] = y
+        self.n = m
+
+    def duration(self):
+        with self.lock:
+            return float(self.t[self.n - 1]) if self.n else 0.0
+
+    def decimated(self, rows, buckets):
+        """(x, y[len(rows), m]) reduced to ~2 points per bucket; copies, safe to keep."""
+        with self.lock:
+            if self.n == 0:
+                return np.empty(0), np.empty((len(rows), 0))
+            x, y = peak_decimate(self.t[:self.n], self.y[list(rows), :self.n], buckets)
+            return x.copy(), y
 
 
 class Recorder:
@@ -266,6 +331,10 @@ class MainWindow(QtWidgets.QMainWindow):
         g = cfg["gui"]
         self.window_s = float(np.clip(float(g["window"]), 0.5, MAX_WINDOW))
         self.buffered = bool(g["buffered"])
+        self.min_span = {"force": float(g["min_span_force"]), "torque": float(g["min_span_torque"])}
+        self.hold_test_view = bool(g["hold_test_view"])
+        self.test = None                       # TestHistory of the current/last recording
+        self.view = "live"                     # "live" rolling window, or "test" = the recording
         self.slots = [str(g["top_left"]).lower(), str(g["top_right"]).lower()]
         for slot in self.slots:
             if slot not in ("torque", "force", "none"):
@@ -330,10 +399,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 ax.setPen(pg.mkPen("#3a3a3a"))
                 ax.setTextPen(pg.mkPen("#c8c8c8"))
                 ax.setStyle(maxTickLevel=0)
-            pw.setLabel("bottom", "time", units="s")
-            pw.disableAutoRange(axis="x")
+            pw.setLabel("bottom", "time (s)")
+            pw.hideButtons()
+            pw.disableAutoRange()               # x and y ranges are set every frame in _refresh
             pw.setXRange(-self.window_s, 0, padding=0)
-            pw.enableAutoRange(axis="y")
+            pw.setYRange(*y_limits(0, 0, self.min_span[group]), padding=0)
             pw.addLegend(offset=(8, 8), brush=pg.mkBrush(30, 30, 30, 210), pen=pg.mkPen("#555"))
             pw.getPlotItem().legend.setAcceptedMouseButtons(QtCore.Qt.NoButton)   # visibility is set with `plot`
             for a in axes:
@@ -356,7 +426,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.console.setReadOnly(True)
         self.console.setFont(mono)
         self.console.setMaximumBlockCount(5000)
-        words = set(cli.HANDLERS) | {"start", "stop", "record", "plot", "window", "pause", "resume",
+        words = set(cli.HANDLERS) | {"start", "stop", "record", "live", "plot", "window", "pause", "resume",
                                      "connect", "clear", "help", "quit", "exit"}
         self.input = CommandLine(words)
         self.input.setFont(mono)
@@ -446,7 +516,7 @@ class MainWindow(QtWidgets.QMainWindow):
         builtin = getattr(self, f"cmd_{name.replace('-', '_')}", None)
         if name in ("quit", "exit"):
             self.close()
-        elif name in ("start", "stop", "record", "plot", "window", "pause", "resume", "connect",
+        elif name in ("start", "stop", "record", "live", "plot", "window", "pause", "resume", "connect",
                       "clear", "help", "monitor", "stream", "read") and builtin:
             try:
                 builtin(rest)
@@ -575,7 +645,13 @@ class MainWindow(QtWidgets.QMainWindow):
         duration = float(rest[1]) if len(rest) > 1 else 0.0
         if self.sensor.cpf is None:
             self.sensor.load_scaling()
-        self.recorder = Recorder(path, self.sensor, duration=duration, count=count)
+        recorder = Recorder(path, self.sensor, duration=duration, count=count)
+        # Only recorded data is plotted during a test: drop the live history and show the test.
+        self.test = TestHistory()
+        self.ring.clear()
+        self.rate_hist.clear()
+        self._set_view("test")
+        self.recorder = recorder               # the stream thread starts writing from here
         limit = f" for {duration:g} s" if duration else (f" for {count} samples" if count else "")
         print(f"Recording to {path}{limit}. `record stop` to finish.")
         if not self.streaming():
@@ -585,15 +661,31 @@ class MainWindow(QtWidgets.QMainWindow):
         rec, self.recorder = self.recorder, None
         if rec is not None:
             self.log(rec.close(self.sensor.dropped))
+            self._recording_ended()
+
+    def _set_view(self, view):
+        self.view = view
+        label = "time since recording start (s)" if view == "test" else "time (s)"
+        for pw in self.plots.values():
+            pw.setLabel("bottom", label)
+            if view == "live":
+                pw.setXRange(-self.window_s, 0, padding=0)
+
+    def cmd_live(self, rest):
+        if self.recorder is not None:
+            print("Recording in progress; the plots show only the recording until it ends.")
+            return
+        self._set_view("live")
+        print(f"Showing the live rolling {self.window_s:g} s window.")
 
     def cmd_window(self, rest):
         if not rest:
             print(f"Plot window: {self.window_s:g} s")
             return
         self.window_s = float(np.clip(float(rest[0]), 0.5, MAX_WINDOW))
-        for pw in self.plots.values():
-            pw.setXRange(-self.window_s, 0, padding=0)
-        print(f"Plot window: {self.window_s:g} s")
+        print(f"Plot window: {self.window_s:g} s"
+              + (" (applies to the live view; the recording view always shows the whole test)"
+                 if self.view == "test" else ""))
 
     def cmd_connect(self, rest):
         was_streaming = self.streaming()
@@ -681,6 +773,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sensor = self.sensor
         with self.io_lock:
             gen = None
+            tt, ty = [], []                      # samples that went into the recording
             try:
                 if not self.launch_applied:
                     cli._apply_launch_settings(sensor, self.cfg)
@@ -708,11 +801,21 @@ class MainWindow(QtWidgets.QMainWindow):
                     by.append(s.ft)
                     self.latest = s
                     rec = self.recorder
-                    if rec is not None and not rec.write(s):
-                        self._close_recorder_from_stream(rec)
+                    if rec is not None:
+                        before = rec.n
+                        more = rec.write(s)
+                        if rec.n > before:
+                            tt.append(t)
+                            ty.append(s.ft)
+                        if not more:
+                            self._flush_test(tt, ty)
+                            tt, ty = [], []
+                            self._close_recorder_from_stream(rec)
                     if len(bt) >= 512 or s.t_host - last_flush > 0.02:
                         self.ring.extend(np.asarray(bt), np.asarray(by))
                         bt, by = [], []
+                        self._flush_test(tt, ty)
+                        tt, ty = [], []
                         last_flush = s.t_host
                         if self.stream_stop.is_set():
                             break
@@ -723,14 +826,29 @@ class MainWindow(QtWidgets.QMainWindow):
                 if gen is not None:
                     gen.close()              # sends RDT stop
                 if self.recorder is not None:
+                    self._flush_test(tt, ty)
                     self._close_recorder_from_stream(self.recorder)
                 self.log("Streaming stopped.")
+
+    def _flush_test(self, tt, ty):
+        test = self.test
+        if test is not None and tt:
+            test.extend(np.asarray(tt), np.asarray(ty))
 
     def _close_recorder_from_stream(self, rec):
         # The stream thread is the recorder's only writer, so it closes it too.
         if self.recorder is rec:
             self.recorder = None
         self.log(rec.close(self.sensor.dropped))
+        self.bridge.call.emit(self._recording_ended)
+
+    def _recording_ended(self):
+        if self.recorder is not None:          # a new recording already started
+            return
+        if self.hold_test_view:
+            print("Plots are showing the finished recording. `live` returns to the rolling view.")
+        else:
+            self._set_view("live")
 
     # --- redraw ---------------------------------------------------------------------------------------
 
@@ -743,24 +861,43 @@ class MainWindow(QtWidgets.QMainWindow):
         rate = (n_b - n_a) / (t_b - t_a) if t_b > t_a else 0.0
 
         if not self.paused and self.top.isVisible():
-            rows = [i for i, a in enumerate(AXES) if self.visible[a]]
-            t, y = self.ring.last(self.window_s, rows)
-            if len(t) and rows:
-                width = max(pw.width() for pw in self.plots.values() if pw.isVisible())
-                x, y = peak_decimate(t - t[-1], y, max(200, width))
-                for k, i in enumerate(rows):
-                    self.curves[AXES[i]].setData(x, y[k])
+            self._redraw_plots()
 
         self.ticks += 1
         if self.ticks % self.readout_every == 0:
             self._update_readout(rate)
+
+    def _redraw_plots(self):
+        rows = [i for i, a in enumerate(AXES) if self.visible[a]]
+        if not rows:
+            return
+        buckets = max(200, max(pw.width() for pw in self.plots.values() if pw.isVisible()))
+        if self.view == "test" and self.test is not None:
+            x, y = self.test.decimated(rows, buckets)
+            xr = (0.0, max(1.0, float(x[-1]) if len(x) else 0.0))     # whole test, growing
+        else:
+            t, y = self.ring.last(self.window_s, rows)
+            x, y = peak_decimate(t - t[-1], y, buckets) if len(t) else (t, y)
+            xr = (-self.window_s, 0.0)
+        for k, i in enumerate(rows):
+            self.curves[AXES[i]].setData(x, y[k])
+        for group, pw in self.plots.items():
+            if not pw.isVisible():
+                continue
+            pw.setXRange(*xr, padding=0)
+            ks = [k for k, i in enumerate(rows) if AXES[i] in GROUPS[group]]
+            if ks and y.shape[1]:
+                pw.setYRange(*y_limits(float(y[ks].min()), float(y[ks].max()), self.min_span[group]),
+                             padding=0)
 
     def _update_readout(self, rate):
         state = "STREAMING" if self.streaming() else "stopped"
         head = [f"{state} @ {self.sensor.host}" + ("   [plots paused]" if self.paused else "")]
         if self.recorder:
             head.append(f"REC {os.path.basename(self.recorder.path)}  {self.recorder.n} samples  "
-                        f"{self.recorder.elapsed():.1f} s")
+                        f"{self.recorder.elapsed():.1f} s   (plots show this recording)")
+        elif self.view == "test" and self.test is not None:
+            head.append(f"Plots: finished recording ({self.test.duration():.1f} s). `live` to return.")
         s = self.latest
         if s is None or self.sensor.cpf is None:
             body = ["No data yet." if self.streaming() else "Not streaming. Type `start`."]

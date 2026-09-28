@@ -37,8 +37,11 @@ stream:
 gui:
   top_left: torque           # plot in the top-left quadrant: torque, force or none
   top_right: force           # plot in the top-right quadrant
-  channels: Tx Ty Tz  # channels plotted at startup (change live with `plot`)
+  channels: Tx Ty Tz         # channels plotted at startup (change live with `plot`)
   window: 10                 # seconds of history shown in the plots
+  min_span_force: 0.05       # smallest y-axis span on the force plot, N (keeps noise from filling the plot)
+  min_span_torque: 0.05     # smallest y-axis span on the torque plot, Nm
+  hold_test_view: true       # after a recording, keep it on screen until `live`
   refresh_hz: 30             # plot/readout redraw rate
   autostart: true            # start streaming as soon as the window opens
   buffered: true             # buffered RDT packets: lower CPU at high rates
