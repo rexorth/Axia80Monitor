@@ -1,0 +1,34 @@
+# TorqueMeter launch options for the ATI NET-Axia80-M8.
+#
+# Looked up in this order: --config PATH, ./config.yaml, then this file (project root).
+# Command-line flags override anything set here; AXIA_HOST overrides `host`.
+# Leave a value empty (or null) to use the default.
+
+# --- Connection ---------------------------------------------------------------
+host: 192.168.10.133            # sensor IP address (factory fallback is 192.168.1.1)
+mac: "00:16:BD:00:4D:EC"     # this unit's MAC; `info` warns if the sensor reports a different one
+rdt_port: 49152              # UDP streaming port (sensor default)
+http_port: 80                # web/XML/CGI port (sensor default)
+timeout: 1.0                 # seconds to wait for the sensor before giving up
+
+# --- Sensor settings applied at launch ------------------------------------------
+# Written to the sensor before read/monitor/stream. The sensor stores these, so they
+# persist across power cycles. Leave empty to keep whatever the sensor already has.
+sensor:
+  adc_rate:                  # internal sample rate, Hz: 500, 1000, 2000, 4000 or 8000
+  filter:                    # low-pass filter: 0 = off, 1..8 = progressively lower cutoff
+  rdt_buffer:                # records per UDP packet in buffered mode, 1..40
+  calibration:               # 0 = full range (150 N / 470 N / 8 N·m), 1 = half range, finer
+
+bias_on_start: false         # tare (zero) the sensor before read/monitor/stream
+
+# --- Command defaults -----------------------------------------------------------
+monitor:
+  hz: 20                     # display refresh rate
+  buffered: false            # use buffered (multi-record) RDT packets
+
+stream:
+  csv:                       # default output file; '-' = stdout. Required here or via --csv
+  duration: 0                # seconds to record; 0 = until Ctrl-C
+  count: 0                   # samples to record; 0 = unlimited
+  buffered: false            # recommended above ~2 kHz output rate
