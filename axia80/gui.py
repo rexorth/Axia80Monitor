@@ -22,6 +22,7 @@ redraws with low overhead and latency without hiding spikes.
 
 import collections
 import csv
+import math
 import os
 import queue
 import re
@@ -150,6 +151,25 @@ def y_limits(ymin, ymax, min_span, pad=0.05):
     half = span * (1 + 2 * pad) / 2
     mid = (ymax + ymin) / 2
     return mid - half, mid + half
+
+
+def next_y_range(current, ymin, ymax, min_span, pad=0.05):
+    """Y range for the next frame, holding still while the data fits in a minimum-span window.
+
+    - Data fits in min_span (with padding) and inside the current fixed window: keep it,
+      so the trace moves inside a still axis instead of the axis re-centring every frame.
+    - Data fits in min_span but left the window: re-centre a min_span window on it, once.
+    - Data needs more than min_span: autoscale to the data (+ padding) every frame.
+    """
+    if (ymax - ymin) * (1 + 2 * pad) <= min_span:
+        if current is not None:
+            lo, hi = current
+            fixed = math.isclose(hi - lo, min_span, rel_tol=1e-9, abs_tol=1e-12)
+            if fixed and lo <= ymin and ymax <= hi:
+                return current
+        mid = (ymax + ymin) / 2
+        return mid - min_span / 2, mid + min_span / 2
+    return y_limits(ymin, ymax, min_span, pad)
 
 
 class TestHistory:
@@ -332,6 +352,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.window_s = float(np.clip(float(g["window"]), 0.5, MAX_WINDOW))
         self.buffered = bool(g["buffered"])
         self.min_span = {"force": float(g["min_span_force"]), "torque": float(g["min_span_torque"])}
+        self.y_range = {"force": None, "torque": None}   # last range set per plot (see next_y_range)
         self.hold_test_view = bool(g["hold_test_view"])
         self.test = None                       # TestHistory of the current/last recording
         self.view = "live"                     # "live" rolling window, or "test" = the recording
@@ -665,6 +686,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _set_view(self, view):
         self.view = view
+        self.y_range = {"force": None, "torque": None}      # different data: rescale from scratch
         label = "time since recording start (s)" if view == "test" else "time (s)"
         for pw in self.plots.values():
             pw.setLabel("bottom", label)
@@ -887,8 +909,11 @@ class MainWindow(QtWidgets.QMainWindow):
             pw.setXRange(*xr, padding=0)
             ks = [k for k, i in enumerate(rows) if AXES[i] in GROUPS[group]]
             if ks and y.shape[1]:
-                pw.setYRange(*y_limits(float(y[ks].min()), float(y[ks].max()), self.min_span[group]),
-                             padding=0)
+                yr = next_y_range(self.y_range[group], float(y[ks].min()), float(y[ks].max()),
+                                  self.min_span[group])
+                if yr != self.y_range[group]:
+                    pw.setYRange(*yr, padding=0)
+                    self.y_range[group] = yr
 
     def _update_readout(self, rate):
         state = "STREAMING" if self.streaming() else "stopped"

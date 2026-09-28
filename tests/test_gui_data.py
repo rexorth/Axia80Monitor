@@ -7,7 +7,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 try:
     import numpy as np
-    from axia80.gui import RingBuffer, TestHistory, peak_decimate, y_limits
+    from axia80.gui import RingBuffer, TestHistory, next_y_range, peak_decimate, y_limits
 except ImportError as e:
     raise unittest.SkipTest(f"GUI packages not installed ({e.name}); run with .venv/bin/python")
 
@@ -94,6 +94,36 @@ class YLimitsTest(unittest.TestCase):
         lo, hi = y_limits(-2.0, 3.0, min_span=0.05, pad=0.05)
         self.assertAlmostEqual(lo, -2.25)
         self.assertAlmostEqual(hi, 3.25)
+
+
+class NextYRangeTest(unittest.TestCase):
+    def test_axis_holds_still_while_data_fits(self):
+        r = next_y_range(None, 0.00, 0.02, min_span=0.5)
+        self.assertAlmostEqual(r[1] - r[0], 0.5)
+        self.assertAlmostEqual(sum(r) / 2, 0.01)             # first frame: centred on the data
+        # force applied, but still inside the window: axis must not move
+        self.assertEqual(next_y_range(r, 0.10, 0.20, min_span=0.5), r)
+        self.assertEqual(next_y_range(r, -0.20, -0.18, min_span=0.5), r)
+
+    def test_recentres_once_when_data_leaves_window(self):
+        r = next_y_range(None, 0.0, 0.02, min_span=0.5)          # window ~[-0.24, 0.26]
+        r2 = next_y_range(r, 0.30, 0.32, min_span=0.5)          # small, but outside
+        self.assertAlmostEqual(r2[1] - r2[0], 0.5)
+        self.assertAlmostEqual(sum(r2) / 2, 0.31)
+        self.assertEqual(next_y_range(r2, 0.28, 0.35, min_span=0.5), r2)
+
+    def test_scales_beyond_min_span_and_returns(self):
+        r = next_y_range(None, 0.0, 0.02, min_span=0.5)
+        big = next_y_range(r, -1.0, 3.0, min_span=0.5)
+        self.assertAlmostEqual(big[0], -1.2)
+        self.assertAlmostEqual(big[1], 3.2)
+        # data changes while wide: keeps autoscaling
+        self.assertAlmostEqual(next_y_range(big, -1.0, 2.0, min_span=0.5)[1], 2.15)
+        # back to a quiet signal: fixed min-span window centred on it again
+        back = next_y_range(big, 0.05, 0.07, min_span=0.5)
+        self.assertAlmostEqual(back[1] - back[0], 0.5)
+        self.assertAlmostEqual(sum(back) / 2, 0.06)
+        self.assertEqual(next_y_range(back, 0.0, 0.1, min_span=0.5), back)
 
 
 class TestHistoryTest(unittest.TestCase):

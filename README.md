@@ -164,7 +164,12 @@ A recording can run longer than the 60 s live buffer, so the plots keep their ow
 
 #### Y-axis scaling
 
-Each plot's y-axis fits the data on screen, but never goes below a minimum span: **0.05 N** for force and **0.005 N·m** for torque. When the signal is nearly flat, sensor noise therefore stays small instead of being blown up to fill the plot. Change the minimums with `gui.min_span_force` and `gui.min_span_torque`. Axis ranges are held while plots are `pause`d, so mouse zoom and pan work.
+Each plot's y-axis has a minimum span: **0.5 N** for force and **0.5 N·m** for torque. Change them with `gui.min_span_force` and `gui.min_span_torque`.
+
+- **Data fits within the minimum span:** the axis holds still, and the trace moves inside it rather than the plot re-centring every frame. A nearly flat signal therefore stays small instead of being blown up to fill the plot.
+- **Data leaves the window but still fits within the minimum span:** the window re-centres once.
+- **Data needs more room than the minimum span:** the axis scales to fit it.
+- **Data shrinks back:** once it fits within the minimum span again, the axis returns to a fixed window. Axis ranges are held while plots are `pause`d, so mouse zoom and pan work.
 
 The command line has history (Up/Down) and completes command names (Tab). `set-ip` asks for confirmation in the console; type `y` or `n`.
 
@@ -182,8 +187,8 @@ GUI options in `config.yaml`:
 | `gui.top_left`, `gui.top_right` | `torque`, `force` | Plot in each top quadrant: `torque`, `force` or `none` |
 | `gui.channels` | `Fx Fy Fz Tx Ty Tz` | Channels plotted at startup |
 | `gui.window` | `10` | Seconds of history shown in the live view |
-| `gui.min_span_force` | `0.05` | Smallest y-axis span on the force plot (N) |
-| `gui.min_span_torque` | `0.005` | Smallest y-axis span on the torque plot (N·m) |
+| `gui.min_span_force` | `0.5` | Smallest y-axis span on the force plot (N) |
+| `gui.min_span_torque` | `0.5` | Smallest y-axis span on the torque plot (N·m) |
 | `gui.hold_test_view` | `true` | Keep a finished recording on screen until `live` |
 | `gui.refresh_hz` | `30` | Redraw rate |
 | `gui.autostart` | `true` | Start streaming when the window opens |
